@@ -8,10 +8,11 @@ Gem::Specification.new do |spec|
   spec.authors       = ['Philip Rehberger']
   spec.email         = ['me@philiprehberger.com']
 
-  spec.summary       = 'Generic middleware stack for composing processing pipelines'
+  spec.summary       = 'Generic middleware stack for composing processing pipelines with conditional execution, ' \
+                       'error handling, profiling, and stack composition'
   spec.description   = 'A composable middleware stack that supports lambda and class-based middleware, ' \
-                       'named entries with insert-before/after and removal, and sequential execution ' \
-                       'with short-circuit capability.'
+                       'named entries with insert-before/after and removal, conditional guards, error handling, ' \
+                       'middleware groups, before/after hooks, per-middleware timeouts, and profiling.'
   spec.homepage      = 'https://github.com/philiprehberger/rb-middleware'
   spec.license       = 'MIT'
 
@@ -23,6 +24,6 @@ Gem::Specification.new do |spec|
   spec.metadata['bug_tracker_uri']       = "#{spec.homepage}/issues"
   spec.metadata['rubygems_mfa_required'] = 'true'
 
-  spec.files = Dir['lib/**/*.rb', 'LICENSE', 'README.md', 'CHANGELOG.md']
+  spec.files         = Dir['lib/**/*.rb', 'LICENSE', 'README.md', 'CHANGELOG.md']
   spec.require_paths = ['lib']
 end

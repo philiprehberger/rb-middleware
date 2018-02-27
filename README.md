@@ -1,8 +1,15 @@
 # philiprehberger-middleware
 
-[![Tests](https://github.com/philiprehberger/rb-middleware/actions/workflows/ci.yml/badge.svg)](https://github.com/philiprehberger/rb-middleware/actions/workflows/ci.yml) [![Gem Version](https://img.shields.io/gem/v/philiprehberger-middleware)](https://rubygems.org/gems/philiprehberger-middleware) [![GitHub release](https://img.shields.io/github/v/release/philiprehberger/rb-middleware)](https://github.com/philiprehberger/rb-middleware/releases) [![GitHub last commit](https://img.shields.io/github/last-commit/philiprehberger/rb-middleware)](https://github.com/philiprehberger/rb-middleware/commits/main) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Bug Reports](https://img.shields.io/badge/bug-reports-red.svg)](https://github.com/philiprehberger/rb-middleware/issues) [![Feature Requests](https://img.shields.io/badge/feature-requests-blue.svg)](https://github.com/philiprehberger/rb-middleware/issues) [![GitHub Sponsors](https://img.shields.io/badge/sponsor-philiprehberger-ea4aaa.svg?logo=github)](https://github.com/sponsors/philiprehberger)
+[![Tests](https://github.com/philiprehberger/rb-middleware/actions/workflows/ci.yml/badge.svg)](https://github.com/philiprehberger/rb-middleware/actions/workflows/ci.yml)
+[![Gem Version](https://badge.fury.io/rb/philiprehberger-middleware.svg)](https://rubygems.org/gems/philiprehberger-middleware)
+[![GitHub release](https://img.shields.io/github/v/release/philiprehberger/rb-middleware)](https://github.com/philiprehberger/rb-middleware/releases)
+[![Last updated](https://img.shields.io/github/last-commit/philiprehberger/rb-middleware)](https://github.com/philiprehberger/rb-middleware/commits/main)
+[![License](https://img.shields.io/github/license/philiprehberger/rb-middleware)](LICENSE)
+[![Bug Reports](https://img.shields.io/github/issues/philiprehberger/rb-middleware/bug)](https://github.com/philiprehberger/rb-middleware/issues?q=is%3Aissue+is%3Aopen+label%3Abug)
+[![Feature Requests](https://img.shields.io/github/issues/philiprehberger/rb-middleware/enhancement)](https://github.com/philiprehberger/rb-middleware/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement)
+[![Sponsor](https://img.shields.io/badge/sponsor-GitHub%20Sponsors-ec6cb9)](https://github.com/sponsors/philiprehberger)
 
-Generic middleware stack for composing processing pipelines with conditional execution, error handling, profiling, and stack composition.
+Generic middleware stack for composing processing pipelines with conditional execution, error handling, profiling, and stack composition
 
 ## Requirements
 
@@ -23,8 +30,6 @@ gem install philiprehberger-middleware
 ```
 
 ## Usage
-
-### Basic Stack
 
 ```ruby
 require "philiprehberger/middleware"
@@ -68,15 +73,6 @@ stack.to_a  # => [:first, :last]
 stack.replace(:first, ->(env, next_mw) { next_mw.call(env.merge(replaced: true)) })
 ```
 
-### Named Middleware Lookup
-
-```ruby
-stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth)
-
-middleware = stack[:auth]  # => returns the middleware callable
-stack[:missing]            # => nil
-```
-
 ### Conditional Middleware
 
 ```ruby
@@ -93,6 +89,40 @@ stack.use(
 )
 ```
 
+### Middleware Groups
+
+```ruby
+stack = Philiprehberger::Middleware::Stack.new
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :verify_token)
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :load_user)
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :check_permissions)
+
+stack.group(:auth, [:verify_token, :load_user, :check_permissions])
+stack.disable_group(:auth)   # skips all auth middleware during call
+stack.group_enabled?(:auth)  # => false
+stack.enable_group(:auth)    # re-enables the group
+```
+
+### Before/After Hooks
+
+```ruby
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+
+stack.before(:logging) { |env| env[:start] = Time.now }
+stack.after(:logging) { |env| puts "Duration: #{Time.now - env[:start]}s" }
+```
+
+### Timeout Per Middleware
+
+```ruby
+stack.use(
+  ->(env, next_mw) { next_mw.call(env) },
+  name: :external_api,
+  timeout: 5
+)
+# Raises Philiprehberger::Middleware::TimeoutError if middleware exceeds 5 seconds
+```
+
 ### Error Handling
 
 ```ruby
@@ -103,11 +133,7 @@ stack.use(
 )
 ```
 
-When `on_error` is set, the handler is called and the chain continues with the next middleware. Without `on_error`, exceptions propagate normally.
-
 ### Halt Mechanism
-
-Stop the middleware chain early by setting `env[:halt] = true` or raising `Halt`:
 
 ```ruby
 # Using env[:halt]
@@ -156,9 +182,9 @@ auth_stack.to_a  # => [:auth, :logger]
 | Method | Description |
 |--------|-------------|
 | `.new` | Create an empty middleware stack |
-| `#use(mw, name:, if:, unless:, on_error:)` | Append middleware with optional guards and error handler |
-| `#insert_before(name, mw, name:, if:, unless:, on_error:)` | Insert middleware before a named entry |
-| `#insert_after(name, mw, name:, if:, unless:, on_error:)` | Insert middleware after a named entry |
+| `#use(mw, name:, if:, unless:, on_error:, timeout:)` | Append middleware with optional guards, error handler, and timeout |
+| `#insert_before(name, mw, name:, if:, unless:, on_error:, timeout:)` | Insert middleware before a named entry |
+| `#insert_after(name, mw, name:, if:, unless:, on_error:, timeout:)` | Insert middleware after a named entry |
 | `#remove(name)` | Remove middleware by name |
 | `#replace(name, mw, name:)` | Replace a named middleware, preserving position and guards |
 | `#[](name)` | Look up middleware by name, returns nil if not found |
@@ -166,6 +192,12 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#profile(env)` | Execute the stack and return `{ result:, timings: }` with per-middleware durations |
 | `#merge(other_stack)` | Append all entries from another stack |
 | `#to_a` | List middleware names in order |
+| `#group(name, middleware_names)` | Define a named group of middleware |
+| `#enable_group(name)` | Enable a previously disabled middleware group |
+| `#disable_group(name)` | Disable a middleware group so its entries are skipped |
+| `#group_enabled?(name)` | Check if a middleware group is enabled |
+| `#before(name, &block)` | Attach a hook that runs before the named middleware |
+| `#after(name, &block)` | Attach a hook that runs after the named middleware |
 
 ## Development
 
@@ -177,8 +209,11 @@ bundle exec rubocop
 
 ## Support
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Philip%20Rehberger-blue?logo=linkedin)](https://linkedin.com/in/philiprehberger) [![More Packages](https://img.shields.io/badge/more-packages-blue.svg)](https://github.com/philiprehberger?tab=repositories)
+If you find this package useful, consider giving it a star on GitHub — it helps motivate continued maintenance and development.
+
+[![LinkedIn](https://img.shields.io/badge/Philip%20Rehberger-LinkedIn-0A66C2?logo=linkedin)](https://www.linkedin.com/in/philiprehberger)
+[![More packages](https://img.shields.io/badge/more-open%20source%20packages-blue)](https://philiprehberger.com/open-source-packages)
 
 ## License
 
-MIT
+[MIT](LICENSE)

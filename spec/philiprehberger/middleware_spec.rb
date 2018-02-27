@@ -14,6 +14,12 @@ RSpec.describe Philiprehberger::Middleware do
       expect(Philiprehberger::Middleware::Halt.new).to be_a(StandardError)
     end
   end
+
+  describe 'TimeoutError' do
+    it 'is a subclass of Error' do
+      expect(Philiprehberger::Middleware::TimeoutError.new).to be_a(Philiprehberger::Middleware::Error)
+    end
+  end
 end
 
 RSpec.describe Philiprehberger::Middleware::Stack do
@@ -305,7 +311,7 @@ RSpec.describe Philiprehberger::Middleware::Stack do
     end
   end
 
-  # --- New feature tests ---
+  # --- Conditional middleware tests ---
 
   describe 'conditional middleware (if/unless guards)' do
     describe 'if: guard' do
@@ -778,6 +784,385 @@ RSpec.describe Philiprehberger::Middleware::Stack do
 
       expect(stack[:first]).to eq(mw1)
       expect(stack[:second]).to eq(mw2)
+    end
+  end
+
+  # --- Middleware Groups ---
+
+  describe 'middleware groups' do
+    before do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(verify_token: true)) }, name: :verify_token)
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(load_user: true)) }, name: :load_user)
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(check_permissions: true)) }, name: :check_permissions)
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(logging: true)) }, name: :logging)
+      stack.group(:auth, %i[verify_token load_user check_permissions])
+    end
+
+    describe '#group' do
+      it 'defines a named group of middleware' do
+        expect(stack.group_enabled?(:auth)).to be true
+      end
+
+      it 'returns self for chaining' do
+        result = stack.group(:other, [:logging])
+        expect(result).to eq(stack)
+      end
+    end
+
+    describe '#disable_group' do
+      it 'disables a group so its middleware are skipped during call' do
+        stack.disable_group(:auth)
+        result = stack.call({})
+        expect(result).to eq({ logging: true })
+      end
+
+      it 'returns self for chaining' do
+        result = stack.disable_group(:auth)
+        expect(result).to eq(stack)
+      end
+    end
+
+    describe '#enable_group' do
+      it 're-enables a previously disabled group' do
+        stack.disable_group(:auth)
+        stack.enable_group(:auth)
+        result = stack.call({})
+        expect(result).to eq({ verify_token: true, load_user: true, check_permissions: true, logging: true })
+      end
+
+      it 'returns self for chaining' do
+        result = stack.enable_group(:auth)
+        expect(result).to eq(stack)
+      end
+    end
+
+    describe '#group_enabled?' do
+      it 'returns true when group is enabled' do
+        expect(stack.group_enabled?(:auth)).to be true
+      end
+
+      it 'returns false when group is disabled' do
+        stack.disable_group(:auth)
+        expect(stack.group_enabled?(:auth)).to be false
+      end
+
+      it 'returns true for undefined groups' do
+        expect(stack.group_enabled?(:nonexistent)).to be true
+      end
+    end
+
+    it 'allows toggling groups on and off between calls' do
+      result1 = stack.call({})
+      expect(result1).to include(verify_token: true)
+
+      stack.disable_group(:auth)
+      result2 = stack.call({})
+      expect(result2).not_to include(:verify_token)
+      expect(result2).to include(logging: true)
+
+      stack.enable_group(:auth)
+      result3 = stack.call({})
+      expect(result3).to include(verify_token: true)
+    end
+
+    it 'supports multiple groups' do
+      stack.group(:logging_group, [:logging])
+      stack.disable_group(:auth)
+      stack.disable_group(:logging_group)
+
+      result = stack.call({})
+      expect(result).to eq({})
+    end
+
+    it 'only disables middleware in the disabled group' do
+      stack.disable_group(:auth)
+      result = stack.call({})
+      expect(result).to eq({ logging: true })
+      expect(result).not_to include(:verify_token)
+    end
+
+    it 'works with profiling when groups are disabled' do
+      stack.disable_group(:auth)
+      output = stack.profile({})
+      expect(output[:result]).to eq({ logging: true })
+      expect(output[:timings].map { |t| t[:name] }).to eq([:logging])
+    end
+  end
+
+  # --- Before/After Hooks ---
+
+  describe 'before/after hooks' do
+    describe '#before' do
+      it 'runs a hook before the named middleware' do
+        order = []
+        stack.use(lambda { |env, next_mw|
+          order << :middleware
+          next_mw.call(env)
+        }, name: :logging)
+        stack.before(:logging) { |_env| order << :before_hook }
+
+        stack.call({})
+        expect(order).to eq(%i[before_hook middleware])
+      end
+
+      it 'allows multiple before hooks on the same middleware' do
+        order = []
+        stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+        stack.before(:logging) { |_env| order << :hook1 }
+        stack.before(:logging) { |_env| order << :hook2 }
+
+        stack.call({})
+        expect(order).to eq(%i[hook1 hook2])
+      end
+
+      it 'passes the env to the hook' do
+        captured_env = nil
+        stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+        stack.before(:logging) { |env| captured_env = env }
+
+        stack.call({ request_id: 123 })
+        expect(captured_env).to eq({ request_id: 123 })
+      end
+
+      it 'returns self for chaining' do
+        stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+        result = stack.before(:logging) { |_env| nil }
+        expect(result).to eq(stack)
+      end
+
+      it 'allows hooks to modify the env hash in place' do
+        stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+        stack.before(:logging) { |env| env[:start] = Time.now }
+
+        result = stack.call({})
+        expect(result).to have_key(:start)
+        expect(result[:start]).to be_a(Time)
+      end
+    end
+
+    describe '#after' do
+      it 'runs a hook after the named middleware' do
+        order = []
+        stack.use(lambda { |env, next_mw|
+          order << :middleware
+          next_mw.call(env)
+        }, name: :logging)
+        stack.after(:logging) { |_env| order << :after_hook }
+
+        stack.call({})
+        expect(order).to eq(%i[middleware after_hook])
+      end
+
+      it 'allows multiple after hooks on the same middleware' do
+        order = []
+        stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+        stack.after(:logging) { |_env| order << :hook1 }
+        stack.after(:logging) { |_env| order << :hook2 }
+
+        stack.call({})
+        expect(order).to eq(%i[hook1 hook2])
+      end
+
+      it 'passes the env to the hook' do
+        captured_env = nil
+        stack.use(->(env, next_mw) { env[:processed] = true; next_mw.call(env) }, name: :logging)
+        stack.after(:logging) { |env| captured_env = env }
+
+        stack.call({})
+        expect(captured_env).to include(:processed)
+      end
+
+      it 'returns self for chaining' do
+        stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+        result = stack.after(:logging) { |_env| nil }
+        expect(result).to eq(stack)
+      end
+    end
+
+    describe 'before and after combined' do
+      it 'runs before hooks, then middleware, then after hooks' do
+        order = []
+        stack.use(lambda { |env, next_mw|
+          order << :middleware
+          next_mw.call(env)
+        }, name: :process)
+        stack.before(:process) { |_env| order << :before }
+        stack.after(:process) { |_env| order << :after }
+
+        stack.call({})
+        expect(order).to eq(%i[before middleware after])
+      end
+
+      it 'hooks do not affect the return value of the chain' do
+        stack.use(->(env, next_mw) { next_mw.call(env.merge(data: true)) }, name: :process)
+        stack.before(:process) { |_env| :ignored_before }
+        stack.after(:process) { |_env| :ignored_after }
+
+        result = stack.call({})
+        expect(result).to eq({ data: true })
+      end
+    end
+
+    it 'does not run hooks for skipped conditional middleware' do
+      hook_called = false
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :guarded,
+        if: -> { false }
+      )
+      stack.before(:guarded) { |_env| hook_called = true }
+
+      stack.call({})
+      expect(hook_called).to be false
+    end
+
+    it 'does not run hooks for disabled group middleware' do
+      hook_called = false
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth_check)
+      stack.group(:auth, [:auth_check])
+      stack.before(:auth_check) { |_env| hook_called = true }
+      stack.disable_group(:auth)
+
+      stack.call({})
+      expect(hook_called).to be false
+    end
+  end
+
+  # --- Timeout Per Middleware ---
+
+  describe 'timeout per middleware' do
+    it 'executes middleware normally when within timeout' do
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env.merge(done: true)) },
+        name: :fast,
+        timeout: 5
+      )
+
+      result = stack.call({})
+      expect(result).to eq({ done: true })
+    end
+
+    it 'raises TimeoutError when middleware exceeds timeout' do
+      stack.use(
+        lambda { |_env, _next_mw|
+          sleep(2)
+        },
+        name: :slow_api,
+        timeout: 0.1
+      )
+
+      expect { stack.call({}) }
+        .to raise_error(Philiprehberger::Middleware::TimeoutError, /slow_api/)
+    end
+
+    it 'includes middleware name in the error message' do
+      stack.use(
+        lambda { |_env, _next_mw|
+          sleep(2)
+        },
+        name: :external_api,
+        timeout: 0.1
+      )
+
+      expect { stack.call({}) }
+        .to raise_error(Philiprehberger::Middleware::TimeoutError, /external_api/)
+    end
+
+    it 'includes the timeout duration in the error message' do
+      stack.use(
+        lambda { |_env, _next_mw|
+          sleep(2)
+        },
+        name: :slow,
+        timeout: 0.1
+      )
+
+      expect { stack.call({}) }
+        .to raise_error(Philiprehberger::Middleware::TimeoutError, /0\.1s timeout/)
+    end
+
+    it 'does not restrict middleware without timeout' do
+      stack.use(
+        lambda { |env, next_mw|
+          sleep(0.05)
+          next_mw.call(env.merge(done: true))
+        },
+        name: :no_timeout
+      )
+
+      result = stack.call({})
+      expect(result).to eq({ done: true })
+    end
+
+    it 'allows mixing middleware with and without timeouts' do
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env.merge(first: true)) },
+        name: :first,
+        timeout: 5
+      )
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env.merge(second: true)) },
+        name: :second
+      )
+
+      result = stack.call({})
+      expect(result).to eq({ first: true, second: true })
+    end
+
+    it 'TimeoutError is not caught by on_error' do
+      stack.use(
+        lambda { |_env, _next_mw|
+          sleep(2)
+        },
+        name: :slow,
+        timeout: 0.1,
+        on_error: ->(_e, _env) {}
+      )
+
+      expect { stack.call({}) }
+        .to raise_error(Philiprehberger::Middleware::TimeoutError)
+    end
+
+    it 'works with insert_before timeout option' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :target)
+      stack.insert_before(
+        :target,
+        ->(env, next_mw) { next_mw.call(env.merge(inserted: true)) },
+        name: :fast_insert,
+        timeout: 5
+      )
+
+      result = stack.call({})
+      expect(result).to eq({ inserted: true })
+    end
+
+    it 'works with insert_after timeout option' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :target)
+      stack.insert_after(
+        :target,
+        ->(env, next_mw) { next_mw.call(env.merge(inserted: true)) },
+        name: :fast_insert,
+        timeout: 5
+      )
+
+      result = stack.call({})
+      expect(result).to eq({ inserted: true })
+    end
+
+    it 'preserves timeout on replace' do
+      stack.use(
+        lambda { |_env, _next_mw|
+          sleep(2)
+        },
+        name: :slow,
+        timeout: 0.1
+      )
+      stack.replace(:slow, lambda { |_env, _next_mw|
+        sleep(2)
+      })
+
+      expect { stack.call({}) }
+        .to raise_error(Philiprehberger::Middleware::TimeoutError)
     end
   end
 end
