@@ -965,7 +965,10 @@ RSpec.describe Philiprehberger::Middleware::Stack do
 
       it 'passes the env to the hook' do
         captured_env = nil
-        stack.use(->(env, next_mw) { env[:processed] = true; next_mw.call(env) }, name: :logging)
+        stack.use(lambda { |env, next_mw|
+  env[:processed] = true
+  next_mw.call(env)
+}, name: :logging)
         stack.after(:logging) { |env| captured_env = env }
 
         stack.call({})
