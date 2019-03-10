@@ -1168,4 +1168,263 @@ RSpec.describe Philiprehberger::Middleware::Stack do
         .to raise_error(Philiprehberger::Middleware::TimeoutError)
     end
   end
+
+  # --- Clear ---
+
+  describe '#clear' do
+    it 'removes all middleware entries' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :b)
+      stack.clear
+      expect(stack.to_a).to eq([])
+    end
+
+    it 'removes all groups' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.group(:g, [:a])
+      stack.clear
+      expect(stack.stats[:groups]).to eq([])
+    end
+
+    it 'removes all hooks' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.before(:a) { |_env| nil }
+      stack.after(:a) { |_env| nil }
+      stack.clear
+      expect(stack.stats[:hooks]).to eq({ before: [], after: [] })
+    end
+
+    it 'returns self for chaining' do
+      expect(stack.clear).to eq(stack)
+    end
+
+    it 'results in an empty call returning env unchanged' do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(a: 1)) }, name: :a)
+      stack.clear
+      expect(stack.call({ x: 1 })).to eq({ x: 1 })
+    end
+  end
+
+  # --- Swap ---
+
+  describe '#swap' do
+    it 'swaps positions of two named entries' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :first)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :second)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :third)
+      stack.swap(:first, :third)
+      expect(stack.to_a).to eq(%i[third second first])
+    end
+
+    it 'returns self for chaining' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :b)
+      expect(stack.swap(:a, :b)).to eq(stack)
+    end
+
+    it 'raises if first name is not found' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      expect { stack.swap(:missing, :a) }
+        .to raise_error(Philiprehberger::Middleware::Error, /not found/)
+    end
+
+    it 'raises if second name is not found' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      expect { stack.swap(:a, :missing) }
+        .to raise_error(Philiprehberger::Middleware::Error, /not found/)
+    end
+
+    it 'changes execution order after swap' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+        order << :first
+        next_mw.call(env)
+      }, name: :first)
+      stack.use(lambda { |env, next_mw|
+        order << :second
+        next_mw.call(env)
+      }, name: :second)
+      stack.swap(:first, :second)
+      stack.call({})
+      expect(order).to eq(%i[second first])
+    end
+  end
+
+  # --- Stats ---
+
+  describe '#stats' do
+    it 'returns count of entries' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :b)
+      expect(stack.stats[:count]).to eq(2)
+    end
+
+    it 'returns count of named entries' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env) })
+      expect(stack.stats[:named]).to eq(1)
+    end
+
+    it 'returns group names' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.group(:g1, [:a])
+      expect(stack.stats[:groups]).to eq([:g1])
+    end
+
+    it 'returns hook names' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :b)
+      stack.before(:a) { |_env| nil }
+      stack.after(:b) { |_env| nil }
+      expect(stack.stats[:hooks][:before]).to eq([:a])
+      expect(stack.stats[:hooks][:after]).to eq([:b])
+    end
+
+    it 'returns empty stats for empty stack' do
+      s = stack.stats
+      expect(s[:count]).to eq(0)
+      expect(s[:named]).to eq(0)
+      expect(s[:groups]).to eq([])
+      expect(s[:hooks]).to eq({ before: [], after: [] })
+    end
+  end
+
+  # --- Describe ---
+
+  describe '#describe' do
+    it 'returns a human-readable summary of entries' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logger)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth)
+      desc = stack.describe
+      expect(desc).to include('0: logger')
+      expect(desc).to include('1: auth')
+    end
+
+    it 'shows (unnamed) for entries without a name' do
+      stack.use(->(env, next_mw) { next_mw.call(env) })
+      expect(stack.describe).to include('(unnamed)')
+    end
+
+    it 'shows if-guarded for entries with if guard' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :guarded, if: -> { true })
+      expect(stack.describe).to include('if-guarded')
+    end
+
+    it 'shows unless-guarded for entries with unless guard' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :guarded, unless: -> { false })
+      expect(stack.describe).to include('unless-guarded')
+    end
+
+    it 'shows timeout for entries with timeout' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :timed, timeout: 5)
+      expect(stack.describe).to include('timeout=5s')
+    end
+
+    it 'shows on_error for entries with error handler' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :safe, on_error: ->(_e, _env) {})
+      expect(stack.describe).to include('on_error')
+    end
+
+    it 'returns empty string for empty stack' do
+      expect(stack.describe).to eq('')
+    end
+  end
+
+  # --- Frozen Copy ---
+
+  describe '#frozen_copy' do
+    it 'returns a FrozenStack' do
+      copy = stack.frozen_copy
+      expect(copy).to be_a(Philiprehberger::Middleware::FrozenStack)
+    end
+
+    it 'can execute the frozen copy' do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(a: 1)) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(b: 2)) }, name: :b)
+      copy = stack.frozen_copy
+      result = copy.call({})
+      expect(result).to eq({ a: 1, b: 2 })
+    end
+
+    it 'preserves middleware order' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :first)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :second)
+      copy = stack.frozen_copy
+      expect(copy.to_a).to eq(%i[first second])
+    end
+
+    it 'allows lookup by name' do
+      mw = ->(env, next_mw) { next_mw.call(env) }
+      stack.use(mw, name: :target)
+      copy = stack.frozen_copy
+      expect(copy[:target]).to respond_to(:call)
+    end
+
+    it 'raises on use' do
+      copy = stack.frozen_copy
+      expect { copy.use(->(e, n) { n.call(e) }) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on insert_before' do
+      copy = stack.frozen_copy
+      expect { copy.insert_before(:a, ->(e, n) { n.call(e) }) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on insert_after' do
+      copy = stack.frozen_copy
+      expect { copy.insert_after(:a, ->(e, n) { n.call(e) }) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on remove' do
+      copy = stack.frozen_copy
+      expect { copy.remove(:a) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on replace' do
+      copy = stack.frozen_copy
+      expect { copy.replace(:a, ->(e, n) { n.call(e) }) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on clear' do
+      copy = stack.frozen_copy
+      expect { copy.clear }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on swap' do
+      copy = stack.frozen_copy
+      expect { copy.swap(:a, :b) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'raises on merge' do
+      copy = stack.frozen_copy
+      expect { copy.merge(stack) }
+        .to raise_error(Philiprehberger::Middleware::Error, /frozen/)
+    end
+
+    it 'is not affected by modifications to the original stack' do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(a: 1)) }, name: :a)
+      copy = stack.frozen_copy
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(b: 2)) }, name: :b)
+
+      expect(copy.to_a).to eq([:a])
+      expect(copy.call({})).to eq({ a: 1 })
+    end
+
+    it 'respects disabled groups' do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(auth: true)) }, name: :auth)
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(log: true)) }, name: :log)
+      stack.group(:auth_group, [:auth])
+      stack.disable_group(:auth_group)
+      copy = stack.frozen_copy
+      result = copy.call({})
+      expect(result).to eq({ log: true })
+    end
+  end
 end

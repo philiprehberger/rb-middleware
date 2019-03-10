@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-31
+
+### Added
+- `#clear` to remove all middleware entries, groups, and hooks
+- `#swap(name1, name2)` to swap positions of two named entries
+- `#stats` returning count, named, groups, and hooks metadata
+- `#describe` for human-readable stack summary
+- `#frozen_copy` returning an immutable snapshot that can execute but not be modified
+
 ## [0.3.0] - 2026-03-30
 
 ### Added
