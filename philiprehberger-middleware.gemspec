@@ -9,7 +9,7 @@ Gem::Specification.new do |spec|
   spec.email = ['me@philiprehberger.com']
 
   spec.summary = 'Generic middleware stack for composing processing pipelines with conditional execution, ' \
-                     'error handling, profiling, and stack composition'
+                  'error handling, profiling, and stack composition'
   spec.description = 'A composable middleware stack that supports lambda and class-based middleware, ' \
                      'named entries with insert-before/after and removal, conditional guards, error handling, ' \
                      'middleware groups, before/after hooks, per-middleware timeouts, and profiling.'
