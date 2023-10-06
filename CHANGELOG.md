@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-04-04
+
+### Added
+- `#dry_run(env)` to simulate the middleware stack without executing middleware bodies, returning the ordered list of middleware names that would be executed (respecting disabled groups, conditional guards, and the halt mechanism)
+
 ## [0.4.1] - 2026-03-31
 
 ### Changed

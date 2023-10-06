@@ -1427,4 +1427,140 @@ RSpec.describe Philiprehberger::Middleware::Stack do
       expect(result).to eq({ log: true })
     end
   end
+
+  # --- Dry Run ---
+
+  describe '#dry_run' do
+    it 'returns names of all middleware in order' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logger)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :handler)
+
+      expect(stack.dry_run({})).to eq(%i[logger auth handler])
+    end
+
+    it 'returns an empty array for an empty stack' do
+      expect(stack.dry_run({})).to eq([])
+    end
+
+    it 'includes nil for unnamed middleware' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :named)
+      stack.use(->(env, next_mw) { next_mw.call(env) })
+
+      expect(stack.dry_run({})).to eq([:named, nil])
+    end
+
+    it 'skips middleware with a failing if guard' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :always)
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :guarded,
+        if: -> { false }
+      )
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :after)
+
+      expect(stack.dry_run({})).to eq(%i[always after])
+    end
+
+    it 'includes middleware with a passing if guard' do
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :guarded,
+        if: -> { true }
+      )
+
+      expect(stack.dry_run({})).to eq([:guarded])
+    end
+
+    it 'skips middleware with a truthy unless guard' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :first)
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :skipped,
+        unless: -> { true }
+      )
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :last)
+
+      expect(stack.dry_run({})).to eq(%i[first last])
+    end
+
+    it 'includes middleware with a falsey unless guard' do
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :kept,
+        unless: -> { false }
+      )
+
+      expect(stack.dry_run({})).to eq([:kept])
+    end
+
+    it 'skips middleware in disabled groups' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :load_user)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+      stack.group(:auth_group, %i[auth load_user])
+      stack.disable_group(:auth_group)
+
+      expect(stack.dry_run({})).to eq([:logging])
+    end
+
+    it 'stops at halt when env[:halt] is true' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :before_halt)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :after_halt)
+
+      expect(stack.dry_run({ halt: true })).to eq([])
+    end
+
+    it 'does not stop when env[:halt] is false' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :first)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :second)
+
+      expect(stack.dry_run({ halt: false })).to eq(%i[first second])
+    end
+
+    it 'does not stop when env is not a hash' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :first)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :second)
+
+      expect(stack.dry_run([1, 2])).to eq(%i[first second])
+    end
+
+    it 'does not execute middleware bodies' do
+      executed = false
+      stack.use(lambda { |env, next_mw|
+        executed = true
+        next_mw.call(env)
+      }, name: :side_effect)
+
+      stack.dry_run({})
+      expect(executed).to be false
+    end
+
+    it 'evaluates guards each time dry_run is called' do
+      counter = 0
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :guarded,
+        if: -> { (counter += 1).odd? }
+      )
+
+      expect(stack.dry_run({})).to eq([:guarded])
+      expect(stack.dry_run({})).to eq([])
+      expect(stack.dry_run({})).to eq([:guarded])
+    end
+
+    it 'combines disabled groups and guards correctly' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth)
+      stack.use(
+        ->(env, next_mw) { next_mw.call(env) },
+        name: :debug,
+        if: -> { false }
+      )
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logging)
+      stack.group(:auth_group, [:auth])
+      stack.disable_group(:auth_group)
+
+      expect(stack.dry_run({})).to eq([:logging])
+    end
+  end
 end
