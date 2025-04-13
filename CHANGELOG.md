@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-04-10
+
+### Added
+- `#around(name, &block)` for wrapping hooks that enclose middleware execution (including before/after hooks), with support for multiple nested around hooks per middleware
+
 ## [0.5.1] - 2026-04-08
 
 ### Changed

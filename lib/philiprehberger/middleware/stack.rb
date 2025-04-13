@@ -16,6 +16,7 @@ module Philiprehberger
         @disabled_groups = Set.new
         @before_hooks = Hash.new { |h, k| h[k] = [] }
         @after_hooks = Hash.new { |h, k| h[k] = [] }
+        @around_hooks = Hash.new { |h, k| h[k] = [] }
       end
 
       # Append a middleware to the end of the stack.
@@ -188,6 +189,20 @@ module Philiprehberger
         self
       end
 
+      # Attach an around hook to a named middleware.
+      #
+      # The block wraps the middleware execution (including before/after hooks).
+      # It receives the env and a callable; invoke the callable to run the middleware.
+      # Multiple around hooks nest in registration order (first registered = outermost).
+      #
+      # @param middleware_name [Symbol] name of the middleware to hook
+      # @yield [env, call] block that wraps execution; call `call.call(env)` to proceed
+      # @return [self]
+      def around(middleware_name, &block)
+        @around_hooks[middleware_name] << block
+        self
+      end
+
       # Execute the middleware stack with the given environment.
       #
       # @param env [Object] the environment/context passed through the stack
@@ -261,6 +276,7 @@ module Philiprehberger
         @disabled_groups.clear
         @before_hooks.clear
         @after_hooks.clear
+        @around_hooks.clear
         self
       end
 
@@ -287,7 +303,8 @@ module Philiprehberger
           groups: @groups.keys,
           hooks: {
             before: @before_hooks.keys,
-            after: @after_hooks.keys
+            after: @after_hooks.keys,
+            around: @around_hooks.keys
           }
         }
       end
@@ -311,7 +328,8 @@ module Philiprehberger
       #
       # @return [FrozenStack] a frozen copy that can execute but not be modified
       def frozen_copy
-        FrozenStack.new(@entries.map(&:dup), @groups.dup, @disabled_groups.dup, @before_hooks.dup, @after_hooks.dup)
+        FrozenStack.new(@entries.map(&:dup), @groups.dup, @disabled_groups.dup, @before_hooks.dup, @after_hooks.dup,
+                        @around_hooks.dup)
       end
 
       # Return the list of middleware names/entries.
@@ -381,24 +399,27 @@ module Philiprehberger
             return next_mw.call(env)
           end
 
-          # Run before hooks
-          run_before_hooks(entry.name, env)
+          # Build the core execution (before hooks + middleware + after hooks)
+          core = lambda { |e|
+            run_before_hooks(entry.name, e)
 
-          # Execute with optional profiling and error handling
-          result = if timings
-                     start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                     res = execute_middleware(entry, env, next_mw)
-                     end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-                     timings << { name: entry.name, duration: end_time - start_time }
-                     res
-                   else
-                     execute_middleware(entry, env, next_mw)
-                   end
+            res = if timings
+                    start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                    r = execute_middleware(entry, e, next_mw)
+                    end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                    timings << { name: entry.name, duration: end_time - start_time }
+                    r
+                  else
+                    execute_middleware(entry, e, next_mw)
+                  end
 
-          # Run after hooks
-          run_after_hooks(entry.name, env)
+            run_after_hooks(entry.name, e)
+            res
+          }
 
-          result
+          # Wrap with around hooks (first registered = outermost)
+          wrapped = wrap_around_hooks(entry.name, core)
+          wrapped.call(env)
         }
       end
 
@@ -412,6 +433,17 @@ module Philiprehberger
         return unless name
 
         @after_hooks[name].each { |hook| hook.call(env) }
+      end
+
+      def wrap_around_hooks(name, core)
+        return core unless name
+
+        hooks = @around_hooks[name]
+        return core if hooks.empty?
+
+        hooks.reverse.reduce(core) do |inner, hook|
+          ->(e) { hook.call(e, inner) }
+        end
       end
 
       def execute_middleware(entry, env, next_mw)
@@ -441,12 +473,13 @@ module Philiprehberger
 
     # An immutable snapshot of a middleware stack that can execute but not be modified.
     class FrozenStack
-      def initialize(entries, groups, disabled_groups, before_hooks, after_hooks)
+      def initialize(entries, groups, disabled_groups, before_hooks, after_hooks, around_hooks)
         @entries = entries.freeze
         @groups = groups.freeze
         @disabled_groups = disabled_groups.freeze
         @before_hooks = before_hooks.freeze
         @after_hooks = after_hooks.freeze
+        @around_hooks = around_hooks.freeze
       end
 
       # Execute the frozen middleware stack with the given environment.
@@ -485,7 +518,7 @@ module Philiprehberger
       end
 
       %i[use insert_before insert_after remove replace clear swap merge group enable_group disable_group before
-         after].each do |method|
+         after around].each do |method|
         define_method(method) { |*| raise Philiprehberger::Middleware::Error, 'cannot modify a frozen stack' }
       end
 
@@ -506,8 +539,21 @@ module Philiprehberger
           return next_mw.call(env) if entry.if_guard && !entry.if_guard.call
           return next_mw.call(env) if entry.unless_guard&.call
 
-          entry.middleware.call(env, next_mw)
+          core = ->(e) { entry.middleware.call(e, next_mw) }
+          wrapped = wrap_frozen_around_hooks(entry.name, core)
+          wrapped.call(env)
         }
+      end
+
+      def wrap_frozen_around_hooks(name, core)
+        return core unless name
+
+        hooks = @around_hooks.fetch(name, [])
+        return core if hooks.empty?
+
+        hooks.reverse.reduce(core) do |inner, hook|
+          ->(e) { hook.call(e, inner) }
+        end
       end
     end
   end

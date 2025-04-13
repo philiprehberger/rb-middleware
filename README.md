@@ -4,7 +4,7 @@
 [![Gem Version](https://badge.fury.io/rb/philiprehberger-middleware.svg)](https://rubygems.org/gems/philiprehberger-middleware)
 [![Last updated](https://img.shields.io/github/last-commit/philiprehberger/rb-middleware)](https://github.com/philiprehberger/rb-middleware/commits/main)
 
-Generic middleware stack for composing processing pipelines with conditional execution, error handling, profiling, and stack composition
+Generic middleware stack for composing processing pipelines with conditional execution, hooks, error handling, profiling, and stack composition
 
 ## Requirements
 
@@ -107,6 +107,18 @@ stack.before(:logging) { |env| env[:start] = Time.now }
 stack.after(:logging) { |env| puts "Duration: #{Time.now - env[:start]}s" }
 ```
 
+### Around Hooks
+
+```ruby
+stack.use(->(env, next_mw) { next_mw.call(env.merge(authed: true)) }, name: :auth)
+
+stack.around(:auth) do |env, call|
+  start = Time.now
+  result = call.call(env)
+  result.merge(auth_duration: Time.now - start)
+end
+```
+
 ### Timeout Per Middleware
 
 ```ruby
@@ -207,6 +219,7 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#group_enabled?(name)` | Check if a middleware group is enabled |
 | `#before(name, &block)` | Attach a hook that runs before the named middleware |
 | `#after(name, &block)` | Attach a hook that runs after the named middleware |
+| `#around(name, &block)` | Attach a wrapping hook around the named middleware (receives env and a callable) |
 | `#clear` | Remove all middleware entries, groups, and hooks |
 | `#swap(name1, name2)` | Swap positions of two named entries |
 | `#stats` | Return metadata hash with count, named, groups, and hooks |

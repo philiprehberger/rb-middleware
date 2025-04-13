@@ -1191,7 +1191,7 @@ RSpec.describe Philiprehberger::Middleware::Stack do
       stack.before(:a) { |_env| nil }
       stack.after(:a) { |_env| nil }
       stack.clear
-      expect(stack.stats[:hooks]).to eq({ before: [], after: [] })
+      expect(stack.stats[:hooks]).to eq({ before: [], after: [], around: [] })
     end
 
     it 'returns self for chaining' do
@@ -1285,7 +1285,7 @@ RSpec.describe Philiprehberger::Middleware::Stack do
       expect(s[:count]).to eq(0)
       expect(s[:named]).to eq(0)
       expect(s[:groups]).to eq([])
-      expect(s[:hooks]).to eq({ before: [], after: [] })
+      expect(s[:hooks]).to eq({ before: [], after: [], around: [] })
     end
   end
 
@@ -1561,6 +1561,184 @@ RSpec.describe Philiprehberger::Middleware::Stack do
       stack.disable_group(:auth_group)
 
       expect(stack.dry_run({})).to eq([:logging])
+    end
+  end
+
+  describe '#around' do
+    it 'wraps middleware execution' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+  order << :mw
+  next_mw.call(env)
+}, name: :work)
+      stack.around(:work) do |env, call|
+        order << :before
+        result = call.call(env)
+        order << :after
+        result
+      end
+
+      stack.call({})
+      expect(order).to eq(%i[before mw after])
+    end
+
+    it 'can modify env before and inspect result after' do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(processed: true)) }, name: :work)
+      stack.around(:work) do |env, call|
+        result = call.call(env.merge(injected: true))
+        result.merge(wrapped: true)
+      end
+
+      result = stack.call({})
+      expect(result).to eq({ injected: true, processed: true, wrapped: true })
+    end
+
+    it 'nests multiple around hooks with first registered as outermost' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+  order << :mw
+  next_mw.call(env)
+}, name: :work)
+
+      stack.around(:work) do |env, call|
+        order << :outer_before
+        result = call.call(env)
+        order << :outer_after
+        result
+      end
+
+      stack.around(:work) do |env, call|
+        order << :inner_before
+        result = call.call(env)
+        order << :inner_after
+        result
+      end
+
+      stack.call({})
+      expect(order).to eq(%i[outer_before inner_before mw inner_after outer_after])
+    end
+
+    it 'wraps before/after hooks inside the around hook' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+  order << :mw
+  next_mw.call(env)
+}, name: :work)
+      stack.before(:work) { |_env| order << :before_hook }
+      stack.after(:work) { |_env| order << :after_hook }
+      stack.around(:work) do |env, call|
+        order << :around_start
+        result = call.call(env)
+        order << :around_end
+        result
+      end
+
+      stack.call({})
+      expect(order).to eq(%i[around_start before_hook mw after_hook around_end])
+    end
+
+    it 'does not execute around hook when guard skips middleware' do
+      around_called = false
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :guarded, if: -> { false })
+      stack.around(:guarded) do |env, call|
+        around_called = true
+        call.call(env)
+      end
+
+      stack.call({})
+      expect(around_called).to be false
+    end
+
+    it 'does not execute around hook when group is disabled' do
+      around_called = false
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      stack.group(:workers, [:work])
+      stack.disable_group(:workers)
+      stack.around(:work) do |env, call|
+        around_called = true
+        call.call(env)
+      end
+
+      stack.call({})
+      expect(around_called).to be false
+    end
+
+    it 'works with profiling' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+  order << :mw
+  next_mw.call(env)
+}, name: :work)
+      stack.around(:work) do |env, call|
+        order << :around_start
+        result = call.call(env)
+        order << :around_end
+        result
+      end
+
+      output = stack.profile({})
+      expect(order).to eq(%i[around_start mw around_end])
+      expect(output[:timings].first[:name]).to eq(:work)
+    end
+
+    it 'works with on_error handler' do
+      errors = []
+      stack.use(
+        ->(_env, _next_mw) { raise 'boom' },
+        name: :risky,
+        on_error: ->(err, _env) { errors << err.message }
+      )
+      stack.around(:risky) do |env, call|
+        call.call(env.merge(around: true))
+      end
+
+      stack.call({})
+      expect(errors).to eq(['boom'])
+    end
+
+    it 'returns self for chaining' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      result = stack.around(:work) { |env, call| call.call(env) }
+      expect(result).to be(stack)
+    end
+
+    it 'is included in stats' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      stack.around(:work) { |env, call| call.call(env) }
+
+      expect(stack.stats[:hooks][:around]).to eq([:work])
+    end
+
+    it 'is cleared by #clear' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      stack.around(:work) { |env, call| call.call(env) }
+      stack.clear
+
+      expect(stack.stats[:hooks][:around]).to eq([])
+    end
+
+    it 'works in a frozen copy' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+  order << :mw
+  next_mw.call(env)
+}, name: :work)
+      stack.around(:work) do |env, call|
+        order << :around_start
+        result = call.call(env)
+        order << :around_end
+        result
+      end
+
+      frozen = stack.frozen_copy
+      frozen.call({})
+      expect(order).to eq(%i[around_start mw around_end])
+    end
+
+    it 'raises error when calling #around on a frozen stack' do
+      frozen = stack.frozen_copy
+      expect { frozen.around(:work) { |env, call| call.call(env) } }
+        .to raise_error(Philiprehberger::Middleware::Error, 'cannot modify a frozen stack')
     end
   end
 end
