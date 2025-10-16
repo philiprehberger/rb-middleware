@@ -182,6 +182,23 @@ stack.dry_run({})
 # => [:logger, :auth]  (debug is skipped because guard returns false)
 ```
 
+### Stack Metrics
+
+```ruby
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+
+stack.call({})
+stack.call({})
+
+stack.metrics
+# => {
+#   invocations: 2,
+#   total_time: 0.00031,
+#   avg_time: 0.000155,
+#   last_called_at: 2026-04-16 12:34:56 +0000
+# }
+```
+
 ### Stack Composition
 
 ```ruby
@@ -223,6 +240,7 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#clear` | Remove all middleware entries, groups, and hooks |
 | `#swap(name1, name2)` | Swap positions of two named entries |
 | `#stats` | Return metadata hash with count, named, groups, and hooks |
+| `#metrics` | Return whole-stack aggregate hash with invocations, total_time, avg_time, and last_called_at |
 | `#describe` | Return a human-readable stack summary |
 | `#frozen_copy` | Return an immutable snapshot that can execute but not be modified |
 

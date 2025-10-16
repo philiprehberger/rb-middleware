@@ -1741,4 +1741,78 @@ RSpec.describe Philiprehberger::Middleware::Stack do
         .to raise_error(Philiprehberger::Middleware::Error, 'cannot modify a frozen stack')
     end
   end
+
+  describe '#metrics' do
+    it 'starts with zero invocations and no last_called_at' do
+      metrics = stack.metrics
+      expect(metrics[:invocations]).to eq(0)
+      expect(metrics[:total_time]).to eq(0.0)
+      expect(metrics[:avg_time]).to eq(0.0)
+      expect(metrics[:last_called_at]).to be_nil
+    end
+
+    it 'increments invocations on each call' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      3.times { stack.call({}) }
+      expect(stack.metrics[:invocations]).to eq(3)
+    end
+
+    it 'accumulates total_time across calls' do
+      stack.use(lambda { |env, next_mw|
+        sleep(0.01)
+        next_mw.call(env)
+      }, name: :slow)
+
+      stack.call({})
+      stack.call({})
+      expect(stack.metrics[:total_time]).to be > 0.015
+    end
+
+    it 'computes avg_time as total_time / invocations' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      4.times { stack.call({}) }
+      metrics = stack.metrics
+      expect(metrics[:avg_time]).to be_within(1e-9).of(metrics[:total_time] / metrics[:invocations])
+    end
+
+    it 'returns avg_time of 0.0 when invocations is zero' do
+      expect(stack.metrics[:avg_time]).to eq(0.0)
+    end
+
+    it 'records last_called_at as a Time after calling' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      stack.call({})
+      expect(stack.metrics[:last_called_at]).to be_a(Time)
+    end
+
+    it 'updates last_called_at on each call' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      stack.call({})
+      first = stack.metrics[:last_called_at]
+      sleep(0.01)
+      stack.call({})
+      second = stack.metrics[:last_called_at]
+      expect(second).to be >= first
+    end
+
+    it 'still records an invocation when a Halt is raised' do
+      stack.use(->(_env, _next_mw) { raise Philiprehberger::Middleware::Halt }, name: :halter)
+      stack.call({})
+      expect(stack.metrics[:invocations]).to eq(1)
+    end
+
+    it 'does not replace #stats (per-stack structural metadata)' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :work)
+      stack.call({})
+      expect(stack.stats).to be_a(Hash)
+      expect(stack.stats[:count]).to eq(1)
+      expect(stack.metrics[:invocations]).to eq(1)
+    end
+
+    it 'tracks metrics even when middleware raises and no on_error is set' do
+      stack.use(->(_env, _next_mw) { raise 'boom' }, name: :risky)
+      expect { stack.call({}) }.to raise_error(RuntimeError, 'boom')
+      expect(stack.metrics[:invocations]).to eq(1)
+    end
+  end
 end

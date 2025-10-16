@@ -17,6 +17,10 @@ module Philiprehberger
         @before_hooks = Hash.new { |h, k| h[k] = [] }
         @after_hooks = Hash.new { |h, k| h[k] = [] }
         @around_hooks = Hash.new { |h, k| h[k] = [] }
+        @metrics_mutex = Mutex.new
+        @metrics_invocations = 0
+        @metrics_total_time = 0.0
+        @metrics_last_called_at = nil
       end
 
       # Append a middleware to the end of the stack.
@@ -208,10 +212,13 @@ module Philiprehberger
       # @param env [Object] the environment/context passed through the stack
       # @return [Object] the final environment after all middleware have run
       def call(env)
+        started_at = Process.clock_gettime(Process::CLOCK_MONOTONIC)
         chain = build_chain
         chain.call(env)
       rescue Halt
         env
+      ensure
+        record_invocation(Process.clock_gettime(Process::CLOCK_MONOTONIC) - started_at)
       end
 
       # Execute the middleware stack and return profiling data.
@@ -293,6 +300,24 @@ module Philiprehberger
         self
       end
 
+      # Return whole-stack invocation metrics aggregated across every #call since construction.
+      #
+      # Unlike #stats (structural metadata) and #profile (per-middleware timings), this hash
+      # summarizes how often the stack has been executed and the total wall-clock time spent.
+      #
+      # @return [Hash] { invocations:, total_time:, avg_time:, last_called_at: }
+      def metrics
+        @metrics_mutex.synchronize do
+          avg = @metrics_invocations.zero? ? 0.0 : @metrics_total_time / @metrics_invocations
+          {
+            invocations: @metrics_invocations,
+            total_time: @metrics_total_time,
+            avg_time: avg,
+            last_called_at: @metrics_last_called_at
+          }
+        end
+      end
+
       # Return metadata hash about the stack.
       #
       # @return [Hash] count, named, groups, and hooks metadata
@@ -349,6 +374,14 @@ module Philiprehberger
       private
 
       Entry = Struct.new(:middleware, :name, :if_guard, :unless_guard, :on_error, :timeout, keyword_init: true)
+
+      def record_invocation(duration)
+        @metrics_mutex.synchronize do
+          @metrics_invocations += 1
+          @metrics_total_time += duration
+          @metrics_last_called_at = Time.now
+        end
+      end
 
       def validate_middleware!(middleware)
         raise Error, 'middleware must respond to #call' unless middleware.respond_to?(:call)
