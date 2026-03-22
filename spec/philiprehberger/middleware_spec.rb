@@ -145,4 +145,157 @@ RSpec.describe Philiprehberger::Middleware::Stack do
       expect(result).to eq([1, 2, 3])
     end
   end
+
+  # --- Expanded tests ---
+
+  describe 'empty stack behavior' do
+    it 'returns the exact same object type passed in' do
+      expect(stack.call('hello')).to eq('hello')
+      expect(stack.call(42)).to eq(42)
+      expect(stack.call([1, 2])).to eq([1, 2])
+    end
+  end
+
+  describe 'insert_before at the beginning' do
+    it 'inserts before the first entry' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :original)
+      stack.insert_before(:original, ->(env, next_mw) { next_mw.call(env) }, name: :new_first)
+      expect(stack.to_a).to eq(%i[new_first original])
+    end
+
+    it 'executes inserted middleware first' do
+      order = []
+      stack.use(lambda { |env, next_mw|
+        order << :original
+        next_mw.call(env)
+      }, name: :original)
+      stack.insert_before(:original, lambda { |env, next_mw|
+        order << :inserted
+        next_mw.call(env)
+      }, name: :inserted)
+
+      stack.call({})
+      expect(order).to eq(%i[inserted original])
+    end
+  end
+
+  describe 'insert_after at the end' do
+    it 'inserts after the last entry' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :first)
+      stack.insert_after(:first, ->(env, next_mw) { next_mw.call(env) }, name: :second)
+      expect(stack.to_a).to eq(%i[first second])
+    end
+  end
+
+  describe 'remove and re-add' do
+    it 'allows re-adding middleware after removal' do
+      mw = ->(env, next_mw) { next_mw.call(env) }
+      stack.use(mw, name: :temp)
+      stack.remove(:temp)
+      stack.use(mw, name: :temp)
+      expect(stack.to_a).to eq([:temp])
+    end
+  end
+
+  describe 'middleware mutation of env' do
+    it 'allows middleware to mutate shared env hash' do
+      stack.use(lambda { |env, next_mw|
+        env[:counter] = (env[:counter] || 0) + 1
+        next_mw.call(env)
+      }, name: :increment)
+      stack.use(lambda { |env, next_mw|
+        env[:counter] = (env[:counter] || 0) + 10
+        next_mw.call(env)
+      }, name: :add_ten)
+
+      result = stack.call({})
+      expect(result[:counter]).to eq(11)
+    end
+  end
+
+  describe 'short-circuit prevents downstream execution' do
+    it 'downstream middleware does not execute' do
+      executed = []
+      stack.use(lambda { |env, _next_mw|
+        executed << :stopper
+        env
+      }, name: :stopper)
+      stack.use(lambda { |env, next_mw|
+        executed << :after
+        next_mw.call(env)
+      }, name: :after)
+
+      stack.call({})
+      expect(executed).to eq([:stopper])
+    end
+  end
+
+  describe 'middleware without names' do
+    it 'allows multiple unnamed middleware' do
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(a: 1)) })
+      stack.use(->(env, next_mw) { next_mw.call(env.merge(b: 2)) })
+      result = stack.call({})
+      expect(result).to eq({ a: 1, b: 2 })
+      expect(stack.to_a).to eq([nil, nil])
+    end
+  end
+
+  describe 'chaining use calls' do
+    it 'supports method chaining with use' do
+      result = stack
+               .use(->(env, next_mw) { next_mw.call(env.merge(x: 1)) }, name: :x)
+               .use(->(env, next_mw) { next_mw.call(env.merge(y: 2)) }, name: :y)
+               .call({})
+      expect(result).to eq({ x: 1, y: 2 })
+    end
+  end
+
+  describe 'chaining insert_before' do
+    it 'returns self from insert_before' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :target)
+      result = stack.insert_before(:target, ->(env, next_mw) { next_mw.call(env) }, name: :new)
+      expect(result).to eq(stack)
+    end
+  end
+
+  describe 'chaining insert_after' do
+    it 'returns self from insert_after' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :target)
+      result = stack.insert_after(:target, ->(env, next_mw) { next_mw.call(env) }, name: :new)
+      expect(result).to eq(stack)
+    end
+  end
+
+  describe 'chaining remove' do
+    it 'returns self from remove' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :target)
+      result = stack.remove(:target)
+      expect(result).to eq(stack)
+    end
+  end
+
+  describe 'class-based middleware with state' do
+    it 'can maintain state across calls' do
+      klass = Class.new do
+        attr_reader :call_count
+
+        def initialize
+          @call_count = 0
+        end
+
+        def call(env, next_mw)
+          @call_count += 1
+          next_mw.call(env.merge(calls: @call_count))
+        end
+      end
+
+      mw = klass.new
+      stack.use(mw, name: :counter)
+      stack.call({})
+      stack.call({})
+      result = stack.call({})
+      expect(result[:calls]).to eq(3)
+      expect(mw.call_count).to eq(3)
+    end
+  end
 end
