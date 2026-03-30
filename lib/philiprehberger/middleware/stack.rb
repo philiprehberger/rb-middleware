@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require 'set'
+require 'timeout'
+
 module Philiprehberger
   module Middleware
     # A composable middleware stack for processing pipelines.
@@ -9,24 +12,30 @@ module Philiprehberger
       # Create a new empty middleware stack.
       def initialize
         @entries = []
+        @groups = {}
+        @disabled_groups = Set.new
+        @before_hooks = Hash.new { |h, k| h[k] = [] }
+        @after_hooks = Hash.new { |h, k| h[k] = [] }
       end
 
       # Append a middleware to the end of the stack.
       #
       # @param middleware [#call, Proc] middleware callable accepting (env, next_mw)
       # @param name [String, Symbol, nil] optional name for insertion/removal
-      # @param if_opt [Proc, nil] guard — middleware runs only when this returns truthy
-      # @param unless_opt [Proc, nil] guard — middleware runs only when this returns falsey
+      # @param if_opt [Proc, nil] guard -- middleware runs only when this returns truthy
+      # @param unless_opt [Proc, nil] guard -- middleware runs only when this returns falsey
       # @param on_error [Proc, nil] error handler called with (error, env) when the middleware raises
+      # @param timeout [Numeric, nil] optional timeout in seconds for middleware execution
       # @return [self]
-      def use(middleware, name: nil, if: nil, unless: nil, on_error: nil)
+      def use(middleware, name: nil, if: nil, unless: nil, on_error: nil, timeout: nil)
         validate_middleware!(middleware)
         @entries << Entry.new(
           middleware: middleware,
           name: name,
           if_guard: binding.local_variable_get(:if),
           unless_guard: binding.local_variable_get(:unless),
-          on_error: on_error
+          on_error: on_error,
+          timeout: timeout
         )
         self
       end
@@ -36,12 +45,13 @@ module Philiprehberger
       # @param target_name [String, Symbol] name of the entry to insert before
       # @param middleware [#call, Proc] middleware callable
       # @param name [String, Symbol, nil] optional name for the new entry
-      # @param if_opt [Proc, nil] guard — middleware runs only when this returns truthy
-      # @param unless_opt [Proc, nil] guard — middleware runs only when this returns falsey
+      # @param if_opt [Proc, nil] guard -- middleware runs only when this returns truthy
+      # @param unless_opt [Proc, nil] guard -- middleware runs only when this returns falsey
       # @param on_error [Proc, nil] error handler called with (error, env) when the middleware raises
+      # @param timeout [Numeric, nil] optional timeout in seconds for middleware execution
       # @return [self]
       # @raise [Error] if the target name is not found
-      def insert_before(target_name, middleware, name: nil, if: nil, unless: nil, on_error: nil)
+      def insert_before(target_name, middleware, name: nil, if: nil, unless: nil, on_error: nil, timeout: nil)
         validate_middleware!(middleware)
         index = find_index!(target_name)
         @entries.insert(index, Entry.new(
@@ -49,7 +59,8 @@ module Philiprehberger
                                  name: name,
                                  if_guard: binding.local_variable_get(:if),
                                  unless_guard: binding.local_variable_get(:unless),
-                                 on_error: on_error
+                                 on_error: on_error,
+                                 timeout: timeout
                                ))
         self
       end
@@ -59,12 +70,13 @@ module Philiprehberger
       # @param target_name [String, Symbol] name of the entry to insert after
       # @param middleware [#call, Proc] middleware callable
       # @param name [String, Symbol, nil] optional name for the new entry
-      # @param if_opt [Proc, nil] guard — middleware runs only when this returns truthy
-      # @param unless_opt [Proc, nil] guard — middleware runs only when this returns falsey
+      # @param if_opt [Proc, nil] guard -- middleware runs only when this returns truthy
+      # @param unless_opt [Proc, nil] guard -- middleware runs only when this returns falsey
       # @param on_error [Proc, nil] error handler called with (error, env) when the middleware raises
+      # @param timeout [Numeric, nil] optional timeout in seconds for middleware execution
       # @return [self]
       # @raise [Error] if the target name is not found
-      def insert_after(target_name, middleware, name: nil, if: nil, unless: nil, on_error: nil)
+      def insert_after(target_name, middleware, name: nil, if: nil, unless: nil, on_error: nil, timeout: nil)
         validate_middleware!(middleware)
         index = find_index!(target_name)
         @entries.insert(index + 1, Entry.new(
@@ -72,7 +84,8 @@ module Philiprehberger
                                      name: name,
                                      if_guard: binding.local_variable_get(:if),
                                      unless_guard: binding.local_variable_get(:unless),
-                                     on_error: on_error
+                                     on_error: on_error,
+                                     timeout: timeout
                                    ))
         self
       end
@@ -104,7 +117,8 @@ module Philiprehberger
           name: name || old_entry.name,
           if_guard: old_entry.if_guard,
           unless_guard: old_entry.unless_guard,
-          on_error: old_entry.on_error
+          on_error: old_entry.on_error,
+          timeout: old_entry.timeout
         )
         self
       end
@@ -116,6 +130,62 @@ module Philiprehberger
       def [](target_name)
         entry = @entries.find { |e| e.name == target_name }
         entry&.middleware
+      end
+
+      # Define a named group of middleware.
+      #
+      # @param group_name [Symbol] name of the group
+      # @param middleware_names [Array<Symbol>] names of middleware in the group
+      # @return [self]
+      def group(group_name, middleware_names)
+        @groups[group_name] = middleware_names.dup
+        self
+      end
+
+      # Enable a middleware group.
+      #
+      # @param group_name [Symbol] name of the group to enable
+      # @return [self]
+      def enable_group(group_name)
+        @disabled_groups.delete(group_name)
+        self
+      end
+
+      # Disable a middleware group.
+      #
+      # @param group_name [Symbol] name of the group to disable
+      # @return [self]
+      def disable_group(group_name)
+        @disabled_groups.add(group_name)
+        self
+      end
+
+      # Check if a middleware group is enabled.
+      #
+      # @param group_name [Symbol] name of the group
+      # @return [Boolean] true if the group is enabled (or not defined as a group)
+      def group_enabled?(group_name)
+        !@disabled_groups.include?(group_name)
+      end
+
+      # Attach a before hook to a named middleware.
+      #
+      # @param middleware_name [Symbol] name of the middleware to hook
+      # @yield [env] block to execute before the middleware
+      # @return [self]
+      def before(middleware_name, &block)
+        @before_hooks[middleware_name] << block
+        self
+      end
+
+      # Attach an after hook to a named middleware.
+      #
+      # @param middleware_name [Symbol] name of the middleware to hook
+      # @yield [env] block to execute after the middleware
+      # @return [self]
+      def after(middleware_name, &block)
+        @after_hooks[middleware_name] << block
+        self
       end
 
       # Execute the middleware stack with the given environment.
@@ -162,14 +232,14 @@ module Philiprehberger
 
       protected
 
-      # Yield each entry — used internally by merge.
+      # Yield each entry -- used internally by merge.
       def each_entry(&)
         @entries.each(&)
       end
 
       private
 
-      Entry = Struct.new(:middleware, :name, :if_guard, :unless_guard, :on_error, keyword_init: true)
+      Entry = Struct.new(:middleware, :name, :if_guard, :unless_guard, :on_error, :timeout, keyword_init: true)
 
       def validate_middleware!(middleware)
         raise Error, 'middleware must respond to #call' unless middleware.respond_to?(:call)
@@ -182,19 +252,31 @@ module Philiprehberger
         index
       end
 
+      def disabled_middleware_names
+        names = Set.new
+        @disabled_groups.each do |group_name|
+          group_members = @groups[group_name]
+          group_members&.each { |n| names.add(n) }
+        end
+        names
+      end
+
       def build_chain(timings: nil)
-        # Build from right to left: last middleware calls the terminal,
-        # each preceding middleware calls the next one.
+        disabled = disabled_middleware_names
         terminal = ->(env) { env }
 
         @entries.reverse.reduce(terminal) do |next_mw, entry|
-          build_step(entry, next_mw, timings)
+          if entry.name && disabled.include?(entry.name)
+            next_mw
+          else
+            build_step(entry, next_mw, timings)
+          end
         end
       end
 
       def build_step(entry, next_mw, timings)
         lambda { |env|
-          # Halt check — if env is a Hash and :halt is truthy, stop chain
+          # Halt check -- if env is a Hash and :halt is truthy, stop chain
           if env.is_a?(Hash) && env[:halt]
             return env
           end
@@ -208,28 +290,61 @@ module Philiprehberger
             return next_mw.call(env)
           end
 
+          # Run before hooks
+          run_before_hooks(entry.name, env)
+
           # Execute with optional profiling and error handling
-          if timings
-            start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            result = execute_middleware(entry, env, next_mw)
-            end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-            timings << { name: entry.name, duration: end_time - start_time }
-            result
-          else
-            execute_middleware(entry, env, next_mw)
-          end
+          result = if timings
+                     start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                     res = execute_middleware(entry, env, next_mw)
+                     end_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                     timings << { name: entry.name, duration: end_time - start_time }
+                     res
+                   else
+                     execute_middleware(entry, env, next_mw)
+                   end
+
+          # Run after hooks
+          run_after_hooks(entry.name, env)
+
+          result
         }
       end
 
+      def run_before_hooks(name, env)
+        return unless name
+
+        @before_hooks[name].each { |hook| hook.call(env) }
+      end
+
+      def run_after_hooks(name, env)
+        return unless name
+
+        @after_hooks[name].each { |hook| hook.call(env) }
+      end
+
       def execute_middleware(entry, env, next_mw)
-        entry.middleware.call(env, next_mw)
+        if entry.timeout
+          execute_with_timeout(entry, env, next_mw)
+        else
+          entry.middleware.call(env, next_mw)
+        end
       rescue Halt => e
+        raise e
+      rescue Philiprehberger::Middleware::TimeoutError => e
         raise e
       rescue StandardError => e
         raise e unless entry.on_error
 
         entry.on_error.call(e, env)
         next_mw.call(env)
+      end
+
+      def execute_with_timeout(entry, env, next_mw)
+        Timeout.timeout(entry.timeout, Philiprehberger::Middleware::TimeoutError,
+                        "middleware '#{entry.name}' exceeded #{entry.timeout}s timeout") do
+          entry.middleware.call(env, next_mw)
+        end
       end
     end
   end

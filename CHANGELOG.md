@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-03-30
+
+### Added
+- Middleware groups with `stack.group(:name, [:mw1, :mw2])` for batch enable/disable
+- `stack.enable_group(:name)` and `stack.disable_group(:name)` to toggle entire groups
+- `stack.group_enabled?(:name)` to check if a group is active
+- Before/after hooks with `stack.before(:name) { |env| }` and `stack.after(:name) { |env| }`
+- Multiple hooks per middleware, executed in registration order
+- Timeout per middleware with `stack.use(mw, name: :api, timeout: 5)` raising `TimeoutError`
+- `Middleware::TimeoutError` error class with middleware name in the message
+
 ## [0.2.0] - 2026-03-28
 
 ### Added
