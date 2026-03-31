@@ -223,6 +223,68 @@ module Philiprehberger
         self
       end
 
+      # Remove all middleware entries, groups, and hooks.
+      #
+      # @return [self]
+      def clear
+        @entries.clear
+        @groups.clear
+        @disabled_groups.clear
+        @before_hooks.clear
+        @after_hooks.clear
+        self
+      end
+
+      # Swap positions of two named entries.
+      #
+      # @param name1 [String, Symbol] name of the first entry
+      # @param name2 [String, Symbol] name of the second entry
+      # @return [self]
+      # @raise [Error] if either name is not found
+      def swap(name1, name2)
+        idx1 = find_index!(name1)
+        idx2 = find_index!(name2)
+        @entries[idx1], @entries[idx2] = @entries[idx2], @entries[idx1]
+        self
+      end
+
+      # Return metadata hash about the stack.
+      #
+      # @return [Hash] count, named, groups, and hooks metadata
+      def stats
+        {
+          count: @entries.length,
+          named: @entries.count(&:name),
+          groups: @groups.keys,
+          hooks: {
+            before: @before_hooks.keys,
+            after: @after_hooks.keys
+          }
+        }
+      end
+
+      # Return a human-readable stack summary.
+      #
+      # @return [String] multi-line description of the stack
+      def describe
+        lines = @entries.map.with_index do |entry, idx|
+          parts = ["#{idx}: #{entry.name || '(unnamed)'}"]
+          parts << 'if-guarded' if entry.if_guard
+          parts << 'unless-guarded' if entry.unless_guard
+          parts << "timeout=#{entry.timeout}s" if entry.timeout
+          parts << 'on_error' if entry.on_error
+          parts.join(' | ')
+        end
+        lines.join("\n")
+      end
+
+      # Return an immutable copy of the stack.
+      #
+      # @return [FrozenStack] a frozen copy that can execute but not be modified
+      def frozen_copy
+        FrozenStack.new(@entries.map(&:dup), @groups.dup, @disabled_groups.dup, @before_hooks.dup, @after_hooks.dup)
+      end
+
       # Return the list of middleware names/entries.
       #
       # @return [Array<String, Symbol, nil>] names of middleware in order
@@ -345,6 +407,78 @@ module Philiprehberger
                         "middleware '#{entry.name}' exceeded #{entry.timeout}s timeout") do
           entry.middleware.call(env, next_mw)
         end
+      end
+    end
+
+    # An immutable snapshot of a middleware stack that can execute but not be modified.
+    class FrozenStack
+      def initialize(entries, groups, disabled_groups, before_hooks, after_hooks)
+        @entries = entries.freeze
+        @groups = groups.freeze
+        @disabled_groups = disabled_groups.freeze
+        @before_hooks = before_hooks.freeze
+        @after_hooks = after_hooks.freeze
+      end
+
+      # Execute the frozen middleware stack with the given environment.
+      #
+      # @param env [Object] the environment/context passed through the stack
+      # @return [Object] the final environment after all middleware have run
+      def call(env)
+        disabled = disabled_middleware_names
+        terminal = ->(e) { e }
+        chain = @entries.reverse.reduce(terminal) do |next_mw, entry|
+          if entry.name && disabled.include?(entry.name)
+            next_mw
+          else
+            build_frozen_step(entry, next_mw)
+          end
+        end
+        chain.call(env)
+      rescue Philiprehberger::Middleware::Halt
+        env
+      end
+
+      # Return the list of middleware names.
+      #
+      # @return [Array<String, Symbol, nil>] names of middleware in order
+      def to_a
+        @entries.map(&:name)
+      end
+
+      # Look up an entry by name.
+      #
+      # @param target_name [String, Symbol] name of the entry
+      # @return [#call, nil] the middleware callable, or nil if not found
+      def [](target_name)
+        entry = @entries.find { |e| e.name == target_name }
+        entry&.middleware
+      end
+
+      %i[use insert_before insert_after remove replace clear swap merge group enable_group disable_group before
+         after].each do |method|
+        define_method(method) { |*| raise Philiprehberger::Middleware::Error, 'cannot modify a frozen stack' }
+      end
+
+      private
+
+      def disabled_middleware_names
+        names = Set.new
+        @disabled_groups.each do |group_name|
+          group_members = @groups[group_name]
+          group_members&.each { |n| names.add(n) }
+        end
+        names
+      end
+
+      def build_frozen_step(entry, next_mw)
+        lambda { |env|
+          return env if env.is_a?(Hash) && env[:halt]
+          return next_mw.call(env) if entry.if_guard && !entry.if_guard.call
+          return next_mw.call(env) if entry.unless_guard&.call
+
+          entry.middleware.call(env, next_mw)
+        }
       end
     end
   end

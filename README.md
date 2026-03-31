@@ -198,6 +198,11 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#group_enabled?(name)` | Check if a middleware group is enabled |
 | `#before(name, &block)` | Attach a hook that runs before the named middleware |
 | `#after(name, &block)` | Attach a hook that runs after the named middleware |
+| `#clear` | Remove all middleware entries, groups, and hooks |
+| `#swap(name1, name2)` | Swap positions of two named entries |
+| `#stats` | Return metadata hash with count, named, groups, and hooks |
+| `#describe` | Return a human-readable stack summary |
+| `#frozen_copy` | Return an immutable snapshot that can execute but not be modified |
 
 ## Development
 
