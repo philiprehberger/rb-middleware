@@ -157,6 +157,19 @@ output = stack.profile({})
 # output[:timings] => [{ name: :auth, duration: 0.00012 }, { name: :logger, duration: 0.00005 }]
 ```
 
+### Dry Run
+
+```ruby
+stack = Philiprehberger::Middleware::Stack.new
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :logger)
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :auth)
+stack.use(->(env, next_mw) { next_mw.call(env) }, name: :debug, if: -> { ENV["DEBUG"] == "true" })
+
+# Simulate execution without running middleware bodies
+stack.dry_run({})
+# => [:logger, :auth]  (debug is skipped because guard returns false)
+```
+
 ### Stack Composition
 
 ```ruby
@@ -185,6 +198,7 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#[](name)` | Look up middleware by name, returns nil if not found |
 | `#call(env)` | Execute the stack with the given environment |
 | `#profile(env)` | Execute the stack and return `{ result:, timings: }` with per-middleware durations |
+| `#dry_run(env)` | Simulate execution and return ordered list of middleware names that would run |
 | `#merge(other_stack)` | Append all entries from another stack |
 | `#to_a` | List middleware names in order |
 | `#group(name, middleware_names)` | Define a named group of middleware |

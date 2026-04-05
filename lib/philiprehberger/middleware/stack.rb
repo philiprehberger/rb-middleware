@@ -212,6 +212,35 @@ module Philiprehberger
         { result: env, timings: timings }
       end
 
+      # Simulate the middleware stack without executing middleware bodies.
+      #
+      # Returns the ordered list of middleware names that would be executed,
+      # respecting disabled groups, conditional guards, and the halt mechanism.
+      # Useful for debugging and testing pipeline configuration.
+      #
+      # @param env [Object] the environment/context used to evaluate halt conditions
+      # @return [Array<Symbol, String, nil>] names of middleware that would execute
+      def dry_run(env)
+        disabled = disabled_middleware_names
+        names = []
+
+        @entries.each do |entry|
+          # Skip disabled group members
+          next if entry.name && disabled.include?(entry.name)
+
+          # Check halt condition
+          break if env.is_a?(Hash) && env[:halt]
+
+          # Evaluate conditional guards
+          next if entry.if_guard && !entry.if_guard.call
+          next if entry.unless_guard&.call
+
+          names << entry.name
+        end
+
+        names
+      end
+
       # Merge another stack's entries onto the end of this stack.
       #
       # @param other [Stack] the stack to merge from
