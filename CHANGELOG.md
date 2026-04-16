@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-04-16
+
+### Added
+- `Stack#metrics` returning a whole-stack aggregate hash of `invocations`, `total_time`, `avg_time`, and `last_called_at` collected across every `#call` since construction
+
 ## [0.6.0] - 2026-04-10
 
 ### Added
