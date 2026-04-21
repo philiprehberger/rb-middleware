@@ -364,6 +364,22 @@ module Philiprehberger
         @entries.map(&:name)
       end
 
+      # Number of middleware entries in the stack.
+      #
+      # @return [Integer]
+      def size
+        @entries.length
+      end
+
+      alias length size
+
+      # Whether the stack has zero middleware entries.
+      #
+      # @return [Boolean]
+      def empty?
+        @entries.empty?
+      end
+
       protected
 
       # Yield each entry -- used internally by merge.

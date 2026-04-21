@@ -1815,4 +1815,31 @@ RSpec.describe Philiprehberger::Middleware::Stack do
       expect(stack.metrics[:invocations]).to eq(1)
     end
   end
+
+  describe '#size / #length / #empty?' do
+    let(:stack) { Philiprehberger::Middleware::Stack.new }
+
+    it 'reports empty? true and size 0 for a fresh stack' do
+      expect(stack).to be_empty
+      expect(stack.size).to eq(0)
+      expect(stack.length).to eq(0)
+    end
+
+    it 'increments size as middleware is appended' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      expect(stack.size).to eq(1)
+      expect(stack.length).to eq(1)
+      expect(stack).not_to be_empty
+
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :b)
+      expect(stack.size).to eq(2)
+    end
+
+    it 'decrements size when middleware is removed' do
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :a)
+      stack.use(->(env, next_mw) { next_mw.call(env) }, name: :b)
+      stack.remove(:a)
+      expect(stack.size).to eq(1)
+    end
+  end
 end
