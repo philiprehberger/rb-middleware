@@ -230,6 +230,8 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#dry_run(env)` | Simulate execution and return ordered list of middleware names that would run |
 | `#merge(other_stack)` | Append all entries from another stack |
 | `#to_a` | List middleware names in order |
+| `#size` / `#length` | Number of middleware entries in the stack |
+| `#empty?` | `true` when the stack has zero middleware entries |
 | `#group(name, middleware_names)` | Define a named group of middleware |
 | `#enable_group(name)` | Enable a previously disabled middleware group |
 | `#disable_group(name)` | Disable a middleware group so its entries are skipped |

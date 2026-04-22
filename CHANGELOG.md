@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-04-21
+
+### Added
+- `Stack#size` — number of middleware entries in the stack
+- `Stack#length` — alias for `#size`
+- `Stack#empty?` — whether the stack has zero middleware entries
+
 ## [0.7.0] - 2026-04-16
 
 ### Added
