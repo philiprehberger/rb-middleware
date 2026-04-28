@@ -787,6 +787,46 @@ RSpec.describe Philiprehberger::Middleware::Stack do
     end
   end
 
+  describe '#has? and #index_of' do
+    let(:noop) { ->(env, next_mw) { next_mw.call(env) } }
+
+    it 'returns false / nil for an empty stack' do
+      expect(stack.has?(:missing)).to be(false)
+      expect(stack.index_of(:missing)).to be_nil
+    end
+
+    it 'returns true / position for a present named entry' do
+      stack.use(noop, name: :first)
+      stack.use(noop, name: :second)
+      stack.use(noop, name: :third)
+
+      expect(stack.has?(:second)).to be(true)
+      expect(stack.index_of(:second)).to eq(1)
+    end
+
+    it 'returns false / nil for an absent name' do
+      stack.use(noop, name: :first)
+      expect(stack.has?(:nope)).to be(false)
+      expect(stack.index_of(:nope)).to be_nil
+    end
+
+    it 'does not match unnamed entries when querying by nil' do
+      stack.use(noop)
+      expect(stack.has?(:anything)).to be(false)
+    end
+
+    it 'is available on a frozen stack' do
+      stack.use(noop, name: :first)
+      stack.use(noop, name: :second)
+      frozen = stack.frozen_copy
+
+      expect(frozen.has?(:first)).to be(true)
+      expect(frozen.has?(:nope)).to be(false)
+      expect(frozen.index_of(:second)).to eq(1)
+      expect(frozen.index_of(:nope)).to be_nil
+    end
+  end
+
   # --- Middleware Groups ---
 
   describe 'middleware groups' do

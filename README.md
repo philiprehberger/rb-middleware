@@ -199,6 +199,25 @@ stack.metrics
 # }
 ```
 
+### Lookup
+
+`#[]` returns the middleware itself or `nil`, which conflates "absent" with
+"stored as nil". Use `#has?` and `#index_of` for unambiguous presence and
+position checks. Both are available on `frozen_copy` results too.
+
+```ruby
+stack.use(auth_mw,    name: :auth)
+stack.use(logger_mw,  name: :logger)
+
+stack.has?(:auth)      # => true
+stack.has?(:missing)   # => false
+stack.index_of(:logger) # => 1
+stack.index_of(:nope)  # => nil
+
+frozen = stack.frozen_copy
+frozen.has?(:auth)     # => true
+```
+
 ### Stack Composition
 
 ```ruby
@@ -225,6 +244,8 @@ auth_stack.to_a  # => [:auth, :logger]
 | `#remove(name)` | Remove middleware by name |
 | `#replace(name, mw, name:)` | Replace a named middleware, preserving position and guards |
 | `#[](name)` | Look up middleware by name, returns nil if not found |
+| `#has?(name)` | Whether the stack contains an entry with the given name |
+| `#index_of(name)` | Position of a named entry, or nil when absent |
 | `#call(env)` | Execute the stack with the given environment |
 | `#profile(env)` | Execute the stack and return `{ result:, timings: }` with per-middleware durations |
 | `#dry_run(env)` | Simulate execution and return ordered list of middleware names that would run |

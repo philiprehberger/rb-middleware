@@ -137,6 +137,26 @@ module Philiprehberger
         entry&.middleware
       end
 
+      # Whether the stack contains an entry with the given name.
+      #
+      # Unlike +#[]+, this does not return the middleware itself — useful
+      # when callers need an unambiguous yes/no without conflating an absent
+      # entry with one stored as +nil+.
+      #
+      # @param target_name [String, Symbol] name of the entry
+      # @return [Boolean]
+      def has?(target_name)
+        @entries.any? { |e| e.name == target_name }
+      end
+
+      # Position of a named entry in the stack, or +nil+ when absent.
+      #
+      # @param target_name [String, Symbol] name of the entry
+      # @return [Integer, nil]
+      def index_of(target_name)
+        @entries.index { |e| e.name == target_name }
+      end
+
       # Define a named group of middleware.
       #
       # @param group_name [Symbol] name of the group
@@ -564,6 +584,22 @@ module Philiprehberger
       def [](target_name)
         entry = @entries.find { |e| e.name == target_name }
         entry&.middleware
+      end
+
+      # Whether the frozen stack contains an entry with the given name.
+      #
+      # @param target_name [String, Symbol] name of the entry
+      # @return [Boolean]
+      def has?(target_name)
+        @entries.any? { |e| e.name == target_name }
+      end
+
+      # Position of a named entry in the frozen stack, or +nil+ when absent.
+      #
+      # @param target_name [String, Symbol] name of the entry
+      # @return [Integer, nil]
+      def index_of(target_name)
+        @entries.index { |e| e.name == target_name }
       end
 
       %i[use insert_before insert_after remove replace clear swap merge group enable_group disable_group before

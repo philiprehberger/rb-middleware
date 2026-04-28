@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-04-27
+
+### Added
+- `Stack#has?(name)` — predicate for whether the stack contains an entry with the given name; unambiguous yes/no, unlike `#[]` which can return `nil` for absent or stored-as-nil entries.
+- `Stack#index_of(name)` — position of a named entry in the stack, or `nil` when absent.
+- Both methods are also available on `FrozenStack` (returned by `#frozen_copy`).
+
 ## [0.8.0] - 2026-04-21
 
 ### Added
